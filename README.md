@@ -18,6 +18,27 @@ cd claude-code-fancam-analyser
 pip install -r requirements.txt
 ```
 
+### Mit Virtual Environment (empfohlen)
+
+```bash
+git clone https://github.com/EinUnknownCoder/claude-code-fancam-analyser.git
+cd claude-code-fancam-analyser
+
+# Virtual Environment erstellen
+python -m venv .venv
+
+# Aktivieren (Linux/macOS)
+source .venv/bin/activate
+
+# Aktivieren (Windows)
+.venv\Scripts\activate
+
+# Abhängigkeiten installieren
+pip install -r requirements.txt
+```
+
+Das Virtual Environment muss vor jeder Nutzung aktiviert werden. Zum Deaktivieren: `deactivate`
+
 **Hinweis:** Beim ersten Lauf werden die DeepFace-Modelle heruntergeladen (~500MB).
 
 ## Verwendung
