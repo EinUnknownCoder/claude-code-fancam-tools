@@ -4,13 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-K-Pop Fancam Organizer - A Python tool that automatically sorts fancam videos by identifying the main dancer using facial recognition and clustering.
+K-Pop Fancam Tools - Python tools for processing K-Pop fancam videos:
+- **fancam_organizer.py** - Automatically sorts fancam videos by identifying the main dancer using facial recognition and clustering
+- **fancam_splitter.py** - Splits a video into clips based on a timestamp file using FFmpeg
 
 ## Commands
 
 ```bash
 # Install dependencies
 pip install -r requirements.txt
+
+# --- Fancam Organizer ---
 
 # Run the organizer
 python fancam_organizer.py /path/to/videos
@@ -23,9 +27,31 @@ python fancam_organizer.py /path/to/videos --dry-run
 
 # Adjust clustering parameters
 python fancam_organizer.py /path/to/videos --eps 0.3 --min-samples 2
+
+# --- Fancam Splitter ---
+
+# Split video into clips based on timestamps
+python fancam_splitter.py video.mp4 timestamps.txt
+
+# Custom output directory
+python fancam_splitter.py video.mp4 timestamps.txt -o /path/to/clips
+
+# Dry run (show clips without creating them)
+python fancam_splitter.py video.mp4 timestamps.txt --dry-run
+
+# Use H.265 codec for smaller files
+python fancam_splitter.py video.mp4 timestamps.txt --codec h265
+
+# Stream copy (fast, no re-encoding)
+python fancam_splitter.py video.mp4 timestamps.txt --codec copy
+
+# Adjust quality (lower = better, default 18)
+python fancam_splitter.py video.mp4 timestamps.txt --crf 23 --preset fast
 ```
 
 ## Architecture
+
+### Fancam Organizer
 
 The tool operates in a two-phase pipeline:
 
@@ -40,6 +66,21 @@ The tool operates in a two-phase pipeline:
 - Creates folders: `Dancer_01`, `Dancer_02`, etc. for clusters
 - `Unknown/` for noise (cluster -1), `Error/` for videos with no detected faces
 
+### Fancam Splitter
+
+The tool uses FFmpeg for video processing:
+
+**Timestamp Parsing:**
+- Parses timestamp file with optional `START:` offset
+- Supports `MM:SS` and `HH:MM:SS` formats
+- Automatically calculates clip durations based on next timestamp
+
+**Video Splitting:**
+- Uses FFmpeg subprocess for full codec support
+- H.264 encoding with High profile for smartphone compatibility
+- AAC audio at 192kbps
+- `faststart` flag for web streaming
+
 ## Key Configuration Constants
 
 Located at top of `fancam_organizer.py`:
@@ -48,8 +89,23 @@ Located at top of `fancam_organizer.py`:
 - `EMBEDDING_MODEL = "ArcFace"`
 - `DETECTOR_BACKEND = "retinaface"` (alternatives: yolov8, mtcnn, opencv)
 
+## Timestamp File Format
+
+```
+START: 01:30
+05:16 NCT DOJAEJUNG - PERFUME (Dancebreak)
+09:42 aespa - Supernova
+13:15 RIIZE - Boom Boom Bass
+```
+
+- `START:` line is optional, used as offset when timestamps are from YouTube description
+- Each timestamp line: `MM:SS Title` or `HH:MM:SS Title`
+- Empty lines are ignored
+- Output filenames: `01_NCT_DOJAEJUNG_-_PERFUME.mp4`
+
 ## Notes
 
 - First run downloads DeepFace models (~500MB for ArcFace + RetinaFace)
 - Lower `--eps` values create stricter groupings, higher values are more permissive
 - `--min-samples 1` allows single-video clusters; increase to require minimum group size
+- FFmpeg must be installed for fancam_splitter.py to work
