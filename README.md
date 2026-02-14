@@ -22,14 +22,6 @@ Tools zur Verarbeitung von K-Pop Fancam-Videos.
 ```bash
 git clone https://github.com/EinUnknownCoder/claude-code-fancam-tools.git
 cd claude-code-fancam-tools
-pip install -r requirements.txt
-```
-
-### Mit Virtual Environment (empfohlen)
-
-```bash
-git clone https://github.com/EinUnknownCoder/claude-code-fancam-tools.git
-cd claude-code-fancam-tools
 
 # Virtual Environment erstellen
 python -m venv .venv

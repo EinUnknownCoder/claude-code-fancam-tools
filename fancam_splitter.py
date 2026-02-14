@@ -8,6 +8,7 @@ Nutzt FFmpeg für volle Audio-Unterstützung und Smartphone-Kompatibilität.
 
 import argparse
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -209,7 +210,7 @@ def split_video(
 
     cmd.append(str(output_path))
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, stdout=subprocess.DEVNULL)
 
     return result.returncode == 0
 
@@ -226,6 +227,163 @@ def format_time(seconds: float) -> str:
         return f"{minutes:02d}:{secs:02d}"
 
 
+def process_video(
+    video_path: Path,
+    timestamp_path: Path,
+    output_dir: Path,
+    codec: str = 'h264',
+    crf: int = 18,
+    preset: str = 'medium',
+    dry_run: bool = False,
+    prefix: str = ''
+) -> tuple[int, int, int]:
+    """
+    Verarbeitet ein einzelnes Video anhand einer Timestamp-Datei.
+
+    Returns:
+        Tupel (success_count, skipped_count, error_count)
+    """
+    # Video-Dauer ermitteln
+    print(f"\nVideo: {video_path.name}")
+    try:
+        video_duration = get_video_duration(video_path)
+        print(f"Dauer: {format_time(video_duration)}")
+    except RuntimeError as e:
+        print(f"Fehler: {e}")
+        return (0, 0, 1)
+
+    # Timestamps parsen
+    print(f"Timestamp-Datei: {timestamp_path.name}")
+    try:
+        clips = parse_timestamp_file(timestamp_path)
+    except Exception as e:
+        print(f"Fehler beim Parsen der Timestamps: {e}")
+        return (0, 0, 1)
+
+    if not clips:
+        print("Keine Timestamps gefunden!")
+        return (0, 0, 1)
+
+    # Letzten Clip mit Video-Ende abschließen
+    if 'end' not in clips[-1]:
+        clips[-1]['end'] = video_duration - clips[0]['start']
+
+    print(f"Gefunden: {len(clips)} Clips\n")
+
+    # Clips anzeigen
+    print("=" * 60)
+    print(f"{'Nr':<4} {'Start':<10} {'Ende':<10} {'Dauer':<8} Titel")
+    print("=" * 60)
+
+    for i, clip in enumerate(clips, 1):
+        start = clip['start']
+        end = clip.get('end', video_duration)
+        duration = end - start
+
+        print(f"{i:02d}   {format_time(start):<10} {format_time(end):<10} "
+              f"{format_time(duration):<8} {clip['title']}")
+
+    print("=" * 60)
+
+    if dry_run:
+        print("\n[DRY-RUN] Keine Clips wurden erstellt.")
+        return (0, 0, 0)
+
+    # Ausgabeverzeichnis erstellen
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"\nAusgabe: {output_dir}\n")
+
+    # Clips extrahieren
+    success_count = 0
+    error_count = 0
+    skipped_count = 0
+
+    for i, clip in enumerate(clips, 1):
+        start = clip['start']
+        end = clip.get('end', video_duration)
+        duration = end - start
+
+        # Dateiname generieren
+        title_clean = sanitize_filename(clip['title'])
+        pfx = f"{prefix}_" if prefix else ""
+        filename = f"{pfx}{i:02d}_{title_clean}.mp4"
+        output_path = output_dir / filename
+
+        # Bereits vorhandene Clips überspringen
+        if output_path.exists():
+            print(f"[{i}/{len(clips)}] {filename} — ÜBERSPRUNGEN (existiert bereits)")
+            skipped_count += 1
+            continue
+
+        print(f"\n[{i}/{len(clips)}] {filename}", flush=True)
+
+        success = split_video(
+            input_path=video_path,
+            output_path=output_path,
+            start=start,
+            duration=duration,
+            codec=codec,
+            crf=crf,
+            preset=preset
+        )
+
+        if success:
+            print("OK")
+            success_count += 1
+        else:
+            print("FEHLER")
+            error_count += 1
+
+    return (success_count, skipped_count, error_count)
+
+
+def parse_batch_file(filepath: Path) -> list[tuple[Path, Path]]:
+    """
+    Parst eine Batch-Datei mit Video- und Timestamp-Paaren.
+
+    Format:
+        # Kommentar
+        video1.mp4 | timestamps1.txt
+        video2.mp4 | timestamps2.txt
+
+    Pfade werden relativ zur Batch-Datei aufgelöst.
+
+    Returns:
+        Liste von (video_path, timestamp_path) Tupeln
+    """
+    batch_dir = filepath.parent
+    pairs = []
+
+    with open(filepath, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+
+            # Leere Zeilen und Kommentare überspringen
+            if not line or line.startswith('#'):
+                continue
+
+            if '|' not in line:
+                print(f"Warnung: Zeile übersprungen (kein | Trennzeichen): {line}")
+                continue
+
+            parts = line.split('|', 1)
+            video_str = parts[0].strip()
+            timestamp_str = parts[1].strip()
+
+            video_path = Path(video_str)
+            timestamp_path = Path(timestamp_str)
+
+            # Relative Pfade zur Batch-Datei auflösen
+            if not video_path.is_absolute():
+                video_path = (batch_dir / video_path).resolve()
+            if not timestamp_path.is_absolute():
+                timestamp_path = (batch_dir / timestamp_path).resolve()
+
+            pairs.append((video_path, timestamp_path))
+
+    return pairs
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Fancam Splitter - Schneidet Videos anhand einer Timestamp-Datei"
@@ -233,12 +391,19 @@ def main():
     parser.add_argument(
         "video",
         type=str,
+        nargs='?',
         help="Pfad zur Videodatei"
     )
     parser.add_argument(
         "timestamps",
         type=str,
+        nargs='?',
         help="Pfad zur Timestamp-Datei"
+    )
+    parser.add_argument(
+        "--batch",
+        type=str,
+        help="Batch-Datei mit Video|Timestamp-Paaren (eine pro Zeile)"
     )
     parser.add_argument(
         "-o", "--output",
@@ -278,21 +443,30 @@ def main():
         default="",
         help="Prefix für Dateinamen"
     )
+    parser.add_argument(
+        "--organize",
+        action="store_true",
+        help="Nach dem Splitten den Fancam Organizer auf dem Clips-Ordner starten"
+    )
+    parser.add_argument(
+        "--organize-args",
+        type=str,
+        default="",
+        help="Zusätzliche Argumente für den Organizer (z.B. \"--eps 0.3 --min-samples 2\")"
+    )
 
     args = parser.parse_args()
 
-    video_path = Path(args.video).resolve()
-    timestamp_path = Path(args.timestamps).resolve()
-    output_dir = Path(args.output).resolve()
-
-    # Eingabedateien prüfen
-    if not video_path.exists():
-        print(f"Fehler: Video nicht gefunden: {video_path}")
-        return 1
-
-    if not timestamp_path.exists():
-        print(f"Fehler: Timestamp-Datei nicht gefunden: {timestamp_path}")
-        return 1
+    # Entweder --batch oder video + timestamps
+    if args.batch:
+        batch_path = Path(args.batch).resolve()
+        if not batch_path.exists():
+            print(f"Fehler: Batch-Datei nicht gefunden: {batch_path}")
+            return 1
+    elif args.video and args.timestamps:
+        pass  # Einzelmodus
+    else:
+        parser.error("Entweder --batch DATEI oder VIDEO TIMESTAMPS angeben")
 
     # FFmpeg Verfügbarkeit prüfen
     try:
@@ -305,98 +479,126 @@ def main():
         print("  Windows: https://ffmpeg.org/download.html")
         return 1
 
-    # Video-Dauer ermitteln
-    print(f"\nVideo: {video_path.name}")
-    try:
-        video_duration = get_video_duration(video_path)
-        print(f"Dauer: {format_time(video_duration)}")
-    except RuntimeError as e:
-        print(f"Fehler: {e}")
-        return 1
+    output_dir = Path(args.output).resolve()
 
-    # Timestamps parsen
-    print(f"\nTimestamp-Datei: {timestamp_path.name}")
-    try:
-        clips = parse_timestamp_file(timestamp_path)
-    except Exception as e:
-        print(f"Fehler beim Parsen der Timestamps: {e}")
-        return 1
+    # Batch-Modus
+    if args.batch:
+        pairs = parse_batch_file(batch_path)
+        if not pairs:
+            print("Keine Video-Timestamp-Paare in der Batch-Datei gefunden!")
+            return 1
 
-    if not clips:
-        print("Keine Timestamps gefunden!")
-        return 1
+        print(f"Batch-Modus: {len(pairs)} Videos")
+        print("=" * 60)
 
-    # Letzten Clip mit Video-Ende abschließen
-    if 'end' not in clips[-1]:
-        clips[-1]['end'] = video_duration - clips[0]['start']
+        total_success = 0
+        total_skipped = 0
+        total_errors = 0
 
-    print(f"Gefunden: {len(clips)} Clips\n")
+        for idx, (video_path, timestamp_path) in enumerate(pairs, 1):
+            print(f"\n{'#' * 60}")
+            print(f"# Video {idx}/{len(pairs)}: {video_path.name}")
+            print(f"{'#' * 60}")
 
-    # Clips anzeigen
-    print("=" * 60)
-    print(f"{'Nr':<4} {'Start':<10} {'Ende':<10} {'Dauer':<8} Titel")
-    print("=" * 60)
+            if not video_path.exists():
+                print(f"Fehler: Video nicht gefunden: {video_path}")
+                total_errors += 1
+                continue
 
-    for i, clip in enumerate(clips, 1):
-        start = clip['start']
-        end = clip.get('end', video_duration)
-        duration = end - start
+            if not timestamp_path.exists():
+                print(f"Fehler: Timestamp-Datei nicht gefunden: {timestamp_path}")
+                total_errors += 1
+                continue
 
-        print(f"{i:02d}   {format_time(start):<10} {format_time(end):<10} "
-              f"{format_time(duration):<8} {clip['title']}")
+            success, skipped, errors = process_video(
+                video_path=video_path,
+                timestamp_path=timestamp_path,
+                output_dir=output_dir,
+                codec=args.codec,
+                crf=args.crf,
+                preset=args.preset,
+                dry_run=args.dry_run,
+                prefix=args.prefix
+            )
 
-    print("=" * 60)
+            total_success += success
+            total_skipped += skipped
+            total_errors += errors
 
-    if args.dry_run:
-        print("\n[DRY-RUN] Keine Clips wurden erstellt.")
-        return 0
+        # Gesamtzusammenfassung
+        print(f"\n{'=' * 60}")
+        print(f"GESAMT: {len(pairs)} Videos verarbeitet")
+        parts = []
+        if total_success > 0:
+            parts.append(f"{total_success} Clips erstellt")
+        if total_skipped > 0:
+            parts.append(f"{total_skipped} übersprungen")
+        if total_errors > 0:
+            parts.append(f"{total_errors} Fehler")
+        print(f"Ergebnis: {', '.join(parts)}.")
+        print("=" * 60)
 
-    # Ausgabeverzeichnis erstellen
-    output_dir.mkdir(parents=True, exist_ok=True)
-    print(f"\nAusgabe: {output_dir}\n")
+        split_ok = total_errors == 0
 
-    # Clips extrahieren
-    success_count = 0
-    error_count = 0
+    else:
+        # Einzelmodus
+        video_path = Path(args.video).resolve()
+        timestamp_path = Path(args.timestamps).resolve()
 
-    for i, clip in enumerate(clips, 1):
-        start = clip['start']
-        end = clip.get('end', video_duration)
-        duration = end - start
+        if not video_path.exists():
+            print(f"Fehler: Video nicht gefunden: {video_path}")
+            return 1
 
-        # Dateiname generieren
-        title_clean = sanitize_filename(clip['title'])
-        prefix = f"{args.prefix}_" if args.prefix else ""
-        filename = f"{prefix}{i:02d}_{title_clean}.mp4"
-        output_path = output_dir / filename
+        if not timestamp_path.exists():
+            print(f"Fehler: Timestamp-Datei nicht gefunden: {timestamp_path}")
+            return 1
 
-        print(f"[{i}/{len(clips)}] {filename}...", end=" ", flush=True)
-
-        success = split_video(
-            input_path=video_path,
-            output_path=output_path,
-            start=start,
-            duration=duration,
+        success, skipped, errors = process_video(
+            video_path=video_path,
+            timestamp_path=timestamp_path,
+            output_dir=output_dir,
             codec=args.codec,
             crf=args.crf,
-            preset=args.preset
+            preset=args.preset,
+            dry_run=args.dry_run,
+            prefix=args.prefix
         )
 
-        if success:
-            print("OK")
-            success_count += 1
-        else:
-            print("FEHLER")
-            error_count += 1
+        # Zusammenfassung
+        parts = []
+        if success > 0:
+            parts.append(f"{success} Clips erstellt")
+        if skipped > 0:
+            parts.append(f"{skipped} übersprungen")
+        if errors > 0:
+            parts.append(f"{errors} Fehler")
+        print(f"\nFertig! {', '.join(parts)}.")
 
-    # Zusammenfassung
-    print(f"\nFertig! {success_count} Clips erstellt", end="")
-    if error_count > 0:
-        print(f", {error_count} Fehler")
-    else:
-        print()
+        split_ok = errors == 0
 
-    return 0 if error_count == 0 else 1
+    # Organizer starten
+    if args.organize and not args.dry_run:
+        organizer_script = Path(__file__).resolve().parent / 'fancam_organizer.py'
+
+        if not organizer_script.exists():
+            print(f"\nFehler: Organizer nicht gefunden: {organizer_script}")
+            return 1
+
+        print(f"\n{'#' * 60}")
+        print("# Starte Fancam Organizer...")
+        print(f"{'#' * 60}")
+
+        cmd = [sys.executable, str(organizer_script), str(output_dir)]
+        if args.organize_args:
+            cmd.extend(shlex.split(args.organize_args))
+
+        result = subprocess.run(cmd)
+
+        if result.returncode != 0:
+            print("\nOrganizer mit Fehlern beendet.")
+            return 1
+
+    return 0 if split_ok else 1
 
 
 if __name__ == "__main__":
