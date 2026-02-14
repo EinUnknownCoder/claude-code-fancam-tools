@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 K-Pop Fancam Tools - Python tools for processing K-Pop fancam videos:
 - **fancam_organizer.py** - Automatically sorts fancam videos by identifying the main dancer using facial recognition and clustering
 - **fancam_splitter.py** - Splits a video into clips based on a timestamp file using FFmpeg
+- **srt_generator.py** - Generates .srt subtitle files for Random Dance Game videos from timestamp files
 
 ## Commands
 
@@ -47,6 +48,11 @@ python fancam_splitter.py video.mp4 timestamps.txt --codec copy
 
 # Adjust quality (lower = better, default 18)
 python fancam_splitter.py video.mp4 timestamps.txt --crf 23 --preset fast
+
+# --- SRT Generator ---
+
+# Generate .srt subtitles (edit config constants in script first)
+python srt_generator.py
 ```
 
 ## Architecture
@@ -80,6 +86,22 @@ The tool uses FFmpeg for video processing:
 - H.264 encoding with High profile for smartphone compatibility
 - AAC audio at 192kbps
 - `faststart` flag for web streaming
+
+### SRT Generator
+
+Generates .srt subtitle files showing "ARTIST - SONG TITLE" for Random Dance Game videos:
+
+- Reads numbered timestamp files (1.txt, 2.txt, ...) from a directory
+- Accounts for video intro and playlist transitions (configurable durations)
+- Strips metadata (section info, usernames) from titles, preserves song title parentheses
+- All configuration via constants at top of script (no CLI arguments)
+
+**Configuration constants** at top of `srt_generator.py`:
+- `TIMESTAMPS_DIR` - folder with timestamp files
+- `VIDEO_DURATION` - total video duration
+- `INTRO_DURATION` - intro before first playlist (default 6s)
+- `TRANSITION_DURATION` - gap between playlists (default 6s)
+- `PLAYLIST_STARTS` - absolute start times for playlists 2-N
 
 ## Key Configuration Constants
 
