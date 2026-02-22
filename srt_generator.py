@@ -12,14 +12,17 @@ from pathlib import Path
 
 # ===== KONFIGURATION =====
 
-# Ordner mit den Timestamp-Dateien (1.txt, 2.txt, ...)
-TIMESTAMPS_DIR = "srt_timestamps"
+# Pfad zur Timestamp-Datei mit Playlist-Sektionen
+TIMESTAMPS_FILE = "srt_timestamps/chapters.txt"
 
 # Ausgabepfad für die .srt-Datei
 OUTPUT_FILE = "output.srt"
 
+# Ausgabepfad für die YouTube-Timestamp-Datei
+TIMESTAMPS_OUTPUT_FILE = "timestamps.txt"
+
 # Gesamtdauer des Videos (HH:MM:SS oder MM:SS)
-VIDEO_DURATION = "2:34:51"
+VIDEO_DURATION = "2:30:07"
 
 # Vorlauf vor der ersten Playlist in Sekunden
 INTRO_DURATION = 6
@@ -30,10 +33,10 @@ TRANSITION_DURATION = 6
 # Absolute Startzeiten der Playlists im Video (ab Playlist 2)
 # Playlist 1 startet automatisch nach dem Intro
 PLAYLIST_STARTS = [
-    "29:37",    # Playlist 2
-    "59:04",    # Playlist 3
-    "1:29:56",  # Playlist 4
-    "1:59:23",  # Playlist 5
+    "29:27",    # Playlist 2
+    "58:36",    # Playlist 3
+    "1:29:02",  # Playlist 4
+    "1:58:18",  # Playlist 5
 ]
 
 # ===== ENDE KONFIGURATION =====
@@ -64,32 +67,42 @@ def clean_title(title: str) -> str:
     return re.sub(r'\s*\([^)]*\)\s*$', '', title).strip()
 
 
-def parse_timestamp_file(filepath: Path) -> list[dict]:
+def parse_chapters_file(filepath: Path) -> list[list[dict]]:
     """
-    Parst eine Timestamp-Datei und gibt Song-Einträge zurück.
+    Parst eine Timestamp-Datei mit Playlist-Sektionen.
+
+    Sektionen werden durch '=== PLAYLIST N ===' Header getrennt.
 
     Returns:
-        Liste von {'start': float, 'title': str}
+        Liste von Playlists, jede Playlist ist eine Liste von {'start': float, 'title': str}
     """
-    entries = []
-
     with open(filepath, 'r', encoding='utf-8') as f:
         lines = f.readlines()
 
+    playlists = []
+    current_entries = None
+    playlist_header = re.compile(r'^=+\s*PLAYLIST\s+\d+\s*=+$', re.IGNORECASE)
+
     for line in lines:
         line = line.strip()
-        if not line or line.upper().startswith('START:'):
+
+        if playlist_header.match(line):
+            current_entries = []
+            playlists.append(current_entries)
+            continue
+
+        if current_entries is None or not line or line.upper().startswith('START:'):
             continue
 
         match = re.match(r'^(\d{1,2}:\d{2}(?::\d{2})?)\s+(.+)$', line)
         if match:
             time_str, title = match.groups()
-            entries.append({
+            current_entries.append({
                 'start': parse_time_to_seconds(time_str),
                 'title': clean_title(title),
             })
 
-    return entries
+    return playlists
 
 
 def generate_subtitles() -> list[dict]:
@@ -99,23 +112,22 @@ def generate_subtitles() -> list[dict]:
     Returns:
         Liste von {'index': int, 'start': float, 'end': float, 'text': str}
     """
-    timestamps_dir = Path(TIMESTAMPS_DIR)
-    if not timestamps_dir.is_dir():
-        print(f"Fehler: Ordner nicht gefunden: {timestamps_dir}")
+    timestamps_file = Path(TIMESTAMPS_FILE)
+    if not timestamps_file.is_file():
+        print(f"Fehler: Datei nicht gefunden: {timestamps_file}")
         sys.exit(1)
 
-    # Timestamp-Dateien numerisch sortiert finden
-    txt_files = sorted(timestamps_dir.glob("*.txt"), key=lambda p: int(p.stem))
-    if not txt_files:
-        print(f"Fehler: Keine .txt-Dateien in {timestamps_dir} gefunden")
+    playlists = parse_chapters_file(timestamps_file)
+    if not playlists:
+        print(f"Fehler: Keine Playlists in {timestamps_file} gefunden")
         sys.exit(1)
 
-    print(f"Gefunden: {len(txt_files)} Timestamp-Dateien")
+    print(f"Gefunden: {len(playlists)} Playlists")
 
     # Validierung
-    expected_starts = len(txt_files) - 1
+    expected_starts = len(playlists) - 1
     if len(PLAYLIST_STARTS) != expected_starts:
-        print(f"Fehler: {len(txt_files)} Dateien gefunden, aber {len(PLAYLIST_STARTS)} "
+        print(f"Fehler: {len(playlists)} Playlists gefunden, aber {len(PLAYLIST_STARTS)} "
               f"Playlist-Startzeiten angegeben (erwartet: {expected_starts})")
         sys.exit(1)
 
@@ -127,8 +139,8 @@ def generate_subtitles() -> list[dict]:
     # Endzeiten berechnen
     video_duration = parse_time_to_seconds(VIDEO_DURATION)
     playlist_ends = []
-    for i in range(len(txt_files)):
-        if i < len(txt_files) - 1:
+    for i in range(len(playlists)):
+        if i < len(playlists) - 1:
             playlist_ends.append(playlist_abs_starts[i + 1] - TRANSITION_DURATION)
         else:
             playlist_ends.append(video_duration)
@@ -137,16 +149,15 @@ def generate_subtitles() -> list[dict]:
     subtitles = []
     index = 1
 
-    for file_idx, txt_file in enumerate(txt_files):
-        entries = parse_timestamp_file(txt_file)
+    for pl_idx, entries in enumerate(playlists):
         if not entries:
-            print(f"Warnung: Keine Einträge in {txt_file.name}")
+            print(f"Warnung: Keine Einträge in Playlist {pl_idx + 1}")
             continue
 
-        abs_start = playlist_abs_starts[file_idx]
-        playlist_end = playlist_ends[file_idx]
+        abs_start = playlist_abs_starts[pl_idx]
+        playlist_end = playlist_ends[pl_idx]
 
-        print(f"\nPlaylist {file_idx + 1} ({txt_file.name}): "
+        print(f"\nPlaylist {pl_idx + 1}: "
               f"{len(entries)} Songs, "
               f"Start {seconds_to_srt_time(abs_start)}, "
               f"Ende {seconds_to_srt_time(playlist_end)}")
@@ -164,10 +175,33 @@ def generate_subtitles() -> list[dict]:
                 'start': sub_start,
                 'end': sub_end,
                 'text': entry['title'],
+                'playlist': pl_idx + 1,
             })
             index += 1
 
     return subtitles
+
+
+def seconds_to_hhmmss(seconds: float) -> str:
+    """Konvertiert Sekunden in HH:MM:SS Format (ohne Millisekunden)."""
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def write_youtube_timestamps(subtitles: list[dict], output_path: str):
+    """Schreibt YouTube-Kommentar-Timestamps (HH:MM:SS TITLE), nach Playlists unterteilt."""
+    with open(output_path, 'w', encoding='utf-8') as f:
+        f.write("Song Timestamps\n\n")
+        current_playlist = None
+        for sub in subtitles:
+            if sub['playlist'] != current_playlist:
+                if current_playlist is not None:
+                    f.write("\n")
+                f.write(f"Playlist {sub['playlist']}\n")
+                current_playlist = sub['playlist']
+            f.write(f"{seconds_to_hhmmss(sub['start'])} {sub['text']}\n")
 
 
 def write_srt(subtitles: list[dict], output_path: str):
@@ -191,6 +225,9 @@ def main():
 
     write_srt(subtitles, OUTPUT_FILE)
     print(f"Gespeichert: {OUTPUT_FILE}")
+
+    write_youtube_timestamps(subtitles, TIMESTAMPS_OUTPUT_FILE)
+    print(f"Gespeichert: {TIMESTAMPS_OUTPUT_FILE}")
 
     return 0
 

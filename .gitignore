@@ -16,6 +16,11 @@ build/
 .vscode/
 .idea/
 
+# Generated output
+output.srt
+timestamps.txt
+batch.txt
+
 # OS
 Thumbs.db
 Desktop.ini
